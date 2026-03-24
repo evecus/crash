@@ -16,23 +16,36 @@ type FetchResult struct {
 	FilePath  string
 }
 
-// Fetch 拉取订阅，经过 subconverter 转换后保存到核心工作目录
+// Fetch 根据 provider 类型分发拉取逻辑
 func Fetch(sub *models.Subscription) (*FetchResult, error) {
-	convertedURL, err := buildSubConverterURL(sub)
+	switch sub.LinkType {
+	case models.LinkTypeFile:
+		return fetchFile(sub)
+	case models.LinkTypeURI:
+		return fetchURI(sub)
+	default: // url
+		return fetchURL(sub)
+	}
+}
+
+// fetchURL 订阅链接，经 subconverter 转换后保存
+func fetchURL(sub *models.Subscription) (*FetchResult, error) {
+	fetchAddr, err := buildConvertURL(sub)
 	if err != nil {
 		return nil, err
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", convertedURL, nil)
+	req, err := http.NewRequest("GET", fetchAddr, nil)
 	if err != nil {
 		return nil, err
 	}
-	if sub.UserAgent != "" {
-		req.Header.Set("User-Agent", sub.UserAgent)
-	} else {
-		req.Header.Set("User-Agent", "clash.meta/mihomo")
+
+	ua := sub.UserAgent
+	if ua == "" {
+		ua = "clash.meta/mihomo"
 	}
+	req.Header.Set("User-Agent", ua)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -44,36 +57,90 @@ func Fetch(sub *models.Subscription) (*FetchResult, error) {
 		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 最大 10MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, err
 	}
 
-	// 写入到工作目录
-	filePath, err := saveSub(sub, body)
-	if err != nil {
+	filePath := providerPath(sub)
+	if err := os.MkdirAll(providerDir(), 0755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filePath, body, 0644); err != nil {
 		return nil, err
 	}
 
-	nodeCount := countNodes(body, sub.Target)
-
-	return &FetchResult{
-		NodeCount: nodeCount,
-		FilePath:  filePath,
-	}, nil
+	return &FetchResult{NodeCount: countNodes(body), FilePath: filePath}, nil
 }
 
-func buildSubConverterURL(sub *models.Subscription) (string, error) {
+// fetchFile 本地文件，直接确认存在即可
+func fetchFile(sub *models.Subscription) (*FetchResult, error) {
+	if sub.FilePath == "" {
+		return nil, fmt.Errorf("file path is empty")
+	}
+	data, err := os.ReadFile(sub.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read file: %v", err)
+	}
+	return &FetchResult{NodeCount: countNodes(data), FilePath: sub.FilePath}, nil
+}
+
+// fetchURI 单节点分享链接，写入 uri_group 文件
+func fetchURI(sub *models.Subscription) (*FetchResult, error) {
+	if sub.URL == "" {
+		return nil, fmt.Errorf("uri is empty")
+	}
+	if err := os.MkdirAll(providerDir(), 0755); err != nil {
+		return nil, err
+	}
+	// uri_group 文件：每行一个 URI
+	filePath := providerDir() + "/uri_group"
+	// 追加或创建
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// 读取已有内容，避免重复写入
+	existing, _ := io.ReadAll(f)
+	line := fmt.Sprintf("%s %s\n", sub.Name, sub.URL)
+	if !strings.Contains(string(existing), sub.URL) {
+		if _, err := f.WriteString(line); err != nil {
+			return nil, err
+		}
+	}
+	return &FetchResult{NodeCount: 1, FilePath: filePath}, nil
+}
+
+// ProviderFilePath 返回给定 sub 的 provider 文件路径（供外部使用）
+func ProviderFilePath(sub *models.Subscription) string {
+	if sub.LinkType == models.LinkTypeFile {
+		return sub.FilePath
+	}
+	if sub.LinkType == models.LinkTypeURI {
+		return providerDir() + "/uri_group"
+	}
+	return providerPath(sub)
+}
+
+func providerDir() string {
+	return "/etc/crashpanel/core/providers"
+}
+
+func providerPath(sub *models.Subscription) string {
+	return fmt.Sprintf("%s/sub_%d.yaml", providerDir(), sub.ID)
+}
+
+func buildConvertURL(sub *models.Subscription) (string, error) {
+	// 没有配置 subconverter，直接用原链接
 	if sub.SubConverterURL == "" {
-		// 直接使用原始订阅链接（不经过 subconverter）
 		return sub.URL, nil
 	}
-
 	target := sub.Target
 	if target == "" {
 		target = "clash"
 	}
-
 	params := url.Values{}
 	params.Set("target", target)
 	params.Set("url", sub.URL)
@@ -90,46 +157,16 @@ func buildSubConverterURL(sub *models.Subscription) (string, error) {
 	if sub.ConfigURL != "" {
 		params.Set("config", sub.ConfigURL)
 	}
-
 	base := strings.TrimRight(sub.SubConverterURL, "/")
 	return fmt.Sprintf("%s/sub?%s", base, params.Encode()), nil
 }
 
-func saveSub(sub *models.Subscription, data []byte) (string, error) {
-	// 保存到 /etc/crashpanel/core/providers/ 目录
-	dir := "/etc/crashpanel/core/providers"
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-
-	ext := "yaml"
-	if sub.Target == "singbox" {
-		ext = "json"
-	}
-	filePath := fmt.Sprintf("%s/sub_%d.%s", dir, sub.ID, ext)
-
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return "", err
-	}
-	return filePath, nil
-}
-
-func countNodes(data []byte, target string) int {
-	content := string(data)
+func countNodes(data []byte) int {
 	count := 0
-	if target == "singbox" {
-		count = strings.Count(content, `"type": "vmess"`) +
-			strings.Count(content, `"type": "shadowsocks"`) +
-			strings.Count(content, `"type": "trojan"`) +
-			strings.Count(content, `"type": "hysteria"`) +
-			strings.Count(content, `"type": "vless"`)
-	} else {
-		// clash yaml：数 "- name:" 的行数作为近似
-		for _, line := range strings.Split(content, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "-  name:") {
-				count++
-			}
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "- name:") || strings.HasPrefix(t, "-  name:") {
+			count++
 		}
 	}
 	return count

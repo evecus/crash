@@ -14,7 +14,6 @@ import (
 var DB *gorm.DB
 
 func Init(dbPath string) {
-	// 确保目录存在
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Fatalf("failed to create db dir: %v", err)
@@ -28,45 +27,45 @@ func Init(dbPath string) {
 		log.Fatalf("failed to open database: %v", err)
 	}
 
-	// 自动迁移所有模型
 	if err := DB.AutoMigrate(
 		&models.Settings{},
 		&models.Subscription{},
 		&models.FirewallRule{},
 		&models.Task{},
 		&models.DNSConfig{},
+		&models.RuleTemplate{},
 	); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
-	// 初始化默认数据
 	seedDefaults()
 }
 
 func seedDefaults() {
-	// Settings 默认值（只在表为空时插入）
 	var count int64
+
+	// Settings
 	DB.Model(&models.Settings{}).Count(&count)
 	if count == 0 {
 		DB.Create(&models.Settings{
-			CoreType:      "meta",
-			MixPort:       7890,
-			RedirPort:     7892,
-			TproxyPort:    7893,
-			DashboardPort: 9999,
-			DNSPort:       1053,
-			RedirMod:      "Redir",
-			FirewallMod:   "nftables",
-			FirewallArea:  2,
-			DNSMod:        "redir-host",
-			CNIPRoute:     true,
-			CommonPorts:   false,
-			CorePath:      "/usr/local/bin/mihomo",
-			CoreWorkDir:   "/etc/crashpanel/core",
+			CoreType:       "meta",
+			MixPort:        7890,
+			RedirPort:      7892,
+			TproxyPort:     7893,
+			DashboardPort:  9999,
+			DNSPort:        1053,
+			RedirMod:       "Redir",
+			FirewallMod:    "nftables",
+			FirewallArea:   2,
+			DNSMod:         "redir-host",
+			CNIPRoute:      true,
+			CommonPorts:    false,
+			CorePath:       "/usr/local/bin/mihomo",
+			CoreWorkDir:    "/etc/crashpanel/core",
 		})
 	}
 
-	// DNSConfig 默认值
+	// DNSConfig
 	DB.Model(&models.DNSConfig{}).Count(&count)
 	if count == 0 {
 		DB.Create(&models.DNSConfig{
@@ -75,5 +74,22 @@ func seedDefaults() {
 			FakeIPFilter:   "*.lan, *.local, *.home.arpa",
 			FallbackFilter: "geoip:cn",
 		})
+	}
+
+	// RuleTemplate 内置模板列表
+	DB.Model(&models.RuleTemplate{}).Count(&count)
+	if count == 0 {
+		templates := []models.RuleTemplate{
+			{Name: "ACL4SSR 全能优化版（推荐）",      URL: "https://github.com/juewuy/ShellCrash/raw/dev/rules/ShellClash.ini",            IsDefault: true},
+			{Name: "ACL4SSR 精简优化版（推荐）",      URL: "https://github.com/juewuy/ShellCrash/raw/dev/rules/ShellClash_Mini.ini"},
+			{Name: "ACL4SSR 全能+去广告",            URL: "https://github.com/juewuy/ShellCrash/raw/dev/rules/ShellClash_Block.ini"},
+			{Name: "ACL4SSR 极简版（适合自建节点）",  URL: "https://github.com/juewuy/ShellCrash/raw/dev/rules/ShellClash_Nano.ini"},
+			{Name: "ACL4SSR 分流+游戏增强",          URL: "https://github.com/juewuy/ShellCrash/raw/dev/rules/ShellClash_Full.ini"},
+			{Name: "ACL4SSR 多国精简",               URL: "https://github.com/juewuy/ShellCrash/raw/dev/rules/ACL4SSR_Online_Mini_MultiCountry.ini"},
+			{Name: "ACL4SSR 回国专用",               URL: "https://github.com/juewuy/ShellCrash/raw/dev/rules/ACL4SSR_BackCN.ini"},
+			{Name: "DustinWin 精简规则（推荐）",      URL: "https://raw.githubusercontent.com/DustinWin/ruleset_geodata/master/rule_templates/DustinWin_Lite.ini"},
+			{Name: "DustinWin 全分组规则",            URL: "https://raw.githubusercontent.com/DustinWin/ruleset_geodata/master/rule_templates/DustinWin_Full.ini"},
+		}
+		DB.Create(&templates)
 	}
 }
