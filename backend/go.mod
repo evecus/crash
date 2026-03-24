@@ -9,4 +9,4 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	gorm.io/driver/sqlite v1.5.5
 	gorm.io/gorm v1.25.10
-).2
+)
