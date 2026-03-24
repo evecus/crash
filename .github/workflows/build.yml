@@ -32,6 +32,11 @@ jobs:
           npm install
           npm run build
 
+      - name: Go mod tidy (generates go.sum)
+        run: |
+          cd backend
+          go mod tidy
+      
       - name: Install gcc (for CGO/SQLite)
         run: sudo apt-get install -y gcc
 
